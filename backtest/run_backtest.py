@@ -1,5 +1,8 @@
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+import pandas as pd
 
 from backtest.monitor import Monitor
 from strategies.base import BaseStrategy
@@ -168,6 +171,73 @@ class Backtester:
         }
         return result
 
+    def save_trades_csv(self, result: Dict[str, Any], output_path: str) -> str:
+        side_map = {"long": "做多", "short": "做空"}
+        reason_map = {
+            "stop_loss_same_bar": "同根K线先止损",
+            "stop_loss": "止损",
+            "take_profit": "止盈",
+            "strategy": "策略平仓",
+            "max_hold_4h": "超时平仓(4小时)",
+        }
+
+        columns = [
+            "序号",
+            "交易对",
+            "周期",
+            "信号时间",
+            "平仓时间",
+            "方向",
+            "信号类型",
+            "Pinbar振幅(%)",
+            "杠杆倍数",
+            "开仓价",
+            "止盈价",
+            "止损价",
+            "平仓价",
+            "持有K线数",
+            "平仓原因",
+            "毛收益率(未杠杆)",
+            "毛收益率(杠杆后)",
+            "净收益率(杠杆后)",
+            "止损规则(账户%)",
+            "止盈规则(账户%)",
+            "最大持有小时",
+        ]
+        rows: List[Dict[str, Any]] = []
+        for idx, t in enumerate(result["trade_list"], start=1):
+            rows.append(
+                {
+                    "序号": idx,
+                    "交易对": result["symbol"],
+                    "周期": result["interval"],
+                    "信号时间": t["entry_time"],
+                    "平仓时间": t["exit_time"],
+                    "方向": side_map.get(t["side"], t["side"]),
+                    "信号类型": t.get("signal"),
+                    "Pinbar振幅(%)": t.get("amplitude_pct"),
+                    "杠杆倍数": t["leverage"],
+                    "开仓价": t["entry_price"],
+                    "止盈价": t["tp_price"],
+                    "止损价": t["sl_price"],
+                    "平仓价": t["exit_price"],
+                    "持有K线数": t["hold_bars"],
+                    "平仓原因": reason_map.get(t["exit_reason"], t["exit_reason"]),
+                    "毛收益率(未杠杆)": t["gross_unlevered_return"],
+                    "毛收益率(杠杆后)": t["gross_levered_return"],
+                    "净收益率(杠杆后)": t["net_levered_return"],
+                    "止损规则(账户%)": result["stop_loss_pnl_pct"],
+                    "止盈规则(账户%)": result["take_profit_pnl_pct"],
+                    "最大持有小时": result["max_hold_bars"],
+                }
+            )
+
+        df = pd.DataFrame(rows, columns=columns)
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(out, index=False, encoding="utf-8-sig")
+        return str(out.resolve())
+
 
 if __name__ == "__main__":
     config = BacktestConfig(symbol="BTCUSDT", interval="1h", max_hold_bars=4)
@@ -179,4 +249,5 @@ if __name__ == "__main__":
         end_time="2026-04-24 00:00:00",
         limit=1000,
     )
-    print(summary)
+    csv_path = backtester.save_trades_csv(summary, output_path="backtest/results/pinbar_backtest_report.csv")
+    print(f"回测结果已保存: {csv_path}")
