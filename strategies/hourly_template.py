@@ -1,7 +1,6 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-import pandas as pd
-
+from backtest.kline import Kline
 from .base import BaseStrategy
 
 
@@ -18,13 +17,6 @@ class SimplePinbarStrategy(BaseStrategy):
         self.min_amplitude_pct = min_amplitude_pct
 
     @staticmethod
-    def _calc_amplitude_pct(row: pd.Series) -> float:
-        base = float(row["open"])
-        if base == 0:
-            return 0.0
-        return (float(row["high"]) - float(row["low"])) / base * 100.0
-
-    @staticmethod
     def _pick_leverage(amplitude_pct: float) -> Optional[int]:
         if 0.8 <= amplitude_pct <= 1.6:
             return 30
@@ -34,58 +26,32 @@ class SimplePinbarStrategy(BaseStrategy):
             return 5
         return None
 
-    @staticmethod
-    def _is_bearish_pinbar(row: pd.Series) -> bool:
-        high = float(row["high"])
-        low = float(row["low"])
-        op = float(row["open"])
-        cl = float(row["close"])
-
-        candle_range = high - low
-        if candle_range <= 0:
-            return False
-
-        upper_wick = high - max(op, cl)
-        return upper_wick >= candle_range * (2.0 / 3.0)
-
-    @staticmethod
-    def _is_bullish_pinbar(row: pd.Series) -> bool:
-        high = float(row["high"])
-        low = float(row["low"])
-        op = float(row["open"])
-        cl = float(row["close"])
-
-        candle_range = high - low
-        if candle_range <= 0:
-            return False
-
-        lower_wick = min(op, cl) - low
-        return lower_wick >= candle_range * (2.0 / 3.0)
-
-    def _is_obvious_high(self, i: int, candles: pd.DataFrame) -> bool:
+    def _is_obvious_high(self, i: int, klines: List[Kline]) -> bool:
         if i < self.lookback_bars:
             return False
-        prev = candles.iloc[i - self.lookback_bars : i]
-        return float(candles.loc[i, "high"]) >= float(prev["high"].max())
+        prev = klines[i - self.lookback_bars : i]
+        max_prev_high = max(k.high_price for k in prev)
+        return klines[i].high_price >= max_prev_high
 
-    def _is_obvious_low(self, i: int, candles: pd.DataFrame) -> bool:
+    def _is_obvious_low(self, i: int, klines: List[Kline]) -> bool:
         if i < self.lookback_bars:
             return False
-        prev = candles.iloc[i - self.lookback_bars : i]
-        return float(candles.loc[i, "low"]) <= float(prev["low"].min())
+        prev = klines[i - self.lookback_bars : i]
+        min_prev_low = min(k.low_price for k in prev)
+        return klines[i].low_price <= min_prev_low
 
     def generate_entry_signal(
         self,
         i: int,
-        candles: pd.DataFrame,
+        klines: List[Kline],
     ) -> Optional[Dict[str, Any]]:
-        row = candles.loc[i]
-        amplitude_pct = self._calc_amplitude_pct(row)
+        kline = klines[i]
+        amplitude_pct = kline.range_pct
         leverage = self._pick_leverage(amplitude_pct)
         if leverage is None or amplitude_pct < self.min_amplitude_pct:
             return None
 
-        if self._is_obvious_high(i, candles) and self._is_bearish_pinbar(row):
+        if self._is_obvious_high(i, klines) and kline.is_bearish_pinbar():
             return {
                 "side": "short",
                 "leverage": leverage,
@@ -93,7 +59,7 @@ class SimplePinbarStrategy(BaseStrategy):
                 "amplitude_pct": amplitude_pct,
             }
 
-        if self._is_obvious_low(i, candles) and self._is_bullish_pinbar(row):
+        if self._is_obvious_low(i, klines) and kline.is_bullish_pinbar():
             return {
                 "side": "long",
                 "leverage": leverage,
@@ -106,7 +72,7 @@ class SimplePinbarStrategy(BaseStrategy):
     def should_close(
         self,
         i: int,
-        candles: pd.DataFrame,
+        klines: List[Kline],
         position: Dict[str, Any],
     ) -> bool:
         return False

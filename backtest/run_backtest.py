@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from backtest.kline import Kline
 from backtest.monitor import Monitor
 from strategies.base import BaseStrategy
 from strategies.hourly_template import SimplePinbarStrategy
@@ -54,6 +55,26 @@ class Backtester:
             return (entry_price - exit_price) / entry_price
         raise ValueError(f"unsupported side: {side}")
 
+    @staticmethod
+    def _to_klines(candles_df: pd.DataFrame, symbol: str) -> List[Kline]:
+        klines: List[Kline] = []
+        for _, row in candles_df.iterrows():
+            ts = row["open_time"]
+            timestamp = int(pd.Timestamp(ts).timestamp())
+            klines.append(
+                Kline(
+                    symbol=symbol,
+                    interval=self.config.interval,
+                    timestamp=timestamp,
+                    open_price=float(row["open"]),
+                    high_price=float(row["high"]),
+                    low_price=float(row["low"]),
+                    close_price=float(row["close"]),
+                    volume=float(row["volume"]),
+                )
+            )
+        return klines
+
     def run(
         self,
         start_time: Optional[str] = None,
@@ -61,25 +82,27 @@ class Backtester:
         limit: int = 1000,
     ) -> Dict[str, Any]:
         self._validate()
-        candles = self.monitor.get_klines(
+        candles_df = self.monitor.get_klines(
             symbol=self.config.symbol,
             interval=self.config.interval,
             start_time=start_time,
             end_time=end_time,
             limit=limit,
         ).reset_index(drop=True)
+        klines = self._to_klines(candles_df, symbol=self.config.symbol)
 
         trades: List[Dict[str, Any]] = []
         position: Optional[Dict[str, Any]] = None
 
-        for i in range(len(candles)):
-            close_price = float(candles.loc[i, "close"])
-            high_price = float(candles.loc[i, "high"])
-            low_price = float(candles.loc[i, "low"])
-            open_time = candles.loc[i, "open_time"]
+        for i in range(len(klines)):
+            kline = klines[i]
+            close_price = kline.close_price
+            high_price = kline.high_price
+            low_price = kline.low_price
+            open_time = pd.to_datetime(kline.timestamp, unit="s")
 
             if position is None:
-                signal = self.strategy.generate_entry_signal(i, candles)
+                signal = self.strategy.generate_entry_signal(i, klines)
                 if signal:
                     side = signal["side"]
                     leverage = float(signal["leverage"])
@@ -98,7 +121,7 @@ class Backtester:
                 continue
 
             hold_bars = i - position["entry_idx"]
-            strategy_exit = self.strategy.should_close(i, candles, position)
+            strategy_exit = self.strategy.should_close(i, klines, position)
             timeout_exit = hold_bars >= self.config.max_hold_bars
             side = position["side"]
             tp_price = float(position["tp_price"])
@@ -164,7 +187,7 @@ class Backtester:
             "max_hold_bars": self.config.max_hold_bars,
             "stop_loss_pnl_pct": self.config.stop_loss_pnl_pct,
             "take_profit_pnl_pct": self.config.take_profit_pnl_pct,
-            "bars": len(candles),
+            "bars": len(klines),
             "trades": len(trades),
             "total_net_levered_return": total_net_levered_return,
             "trade_list": trades,
@@ -245,8 +268,8 @@ if __name__ == "__main__":
     backtester = Backtester(config=config, strategy=strategy)
 
     summary = backtester.run(
-        start_time="2026-04-01 00:00:00",
-        end_time="2026-04-24 00:00:00",
+        start_time="2026-01-01 00:00:00",
+        end_time="2026-01-24 00:00:00",
         limit=1000,
     )
     csv_path = backtester.save_trades_csv(summary, output_path="backtest/results/pinbar_backtest_report.csv")

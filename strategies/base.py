@@ -1,7 +1,7 @@
 from abc import ABC
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-import pandas as pd
+from backtest.kline import Kline
 
 
 class BaseStrategy(ABC):
@@ -10,7 +10,7 @@ class BaseStrategy(ABC):
     def generate_entry_signal(
         self,
         i: int,
-        candles: pd.DataFrame,
+        klines: List[Kline],
     ) -> Optional[Dict[str, Any]]:
         """
         Return entry signal dict or None.
@@ -23,7 +23,7 @@ class BaseStrategy(ABC):
     def should_close(
         self,
         i: int,
-        candles: pd.DataFrame,
+        klines: List[Kline],
         position: Dict[str, Any],
     ) -> bool:
         """Optional strategy-defined early exit."""
