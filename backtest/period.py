@@ -3,18 +3,7 @@ from datetime import datetime
 from typing import List
 
 from .kline import Kline
-
-
-def interval_to_seconds(interval: str) -> int:
-    unit = interval[-1].lower()
-    value = int(interval[:-1])
-    if unit == "m":
-        return value * 60
-    if unit == "h":
-        return value * 3600
-    if unit == "d":
-        return value * 86400
-    raise ValueError(f"Unsupported interval: {interval}")
+from .utils import interval_to_seconds
 
 
 @dataclass

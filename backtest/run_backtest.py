@@ -1,5 +1,4 @@
-﻿from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -8,8 +7,9 @@ from openpyxl import Workbook
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.utils import get_column_letter
 
+from backtest.binance_api import BinanceAPI
 from backtest.kline import Kline
-from backtest.monitor import Monitor
+from backtest.utils import append_timestamp, format_datetime, to_datetime
 from draw.candlestick_drawer import CandlestickDrawer
 from strategies.base import BaseStrategy
 from strategies.hourly_template import SimplePinbarStrategy
@@ -29,7 +29,7 @@ class Backtester:
     def __init__(self, config: BacktestConfig, strategy: BaseStrategy):
         self.config = config
         self.strategy = strategy
-        self.monitor = Monitor(symbol=config.symbol, interval=config.interval)
+        self.api = BinanceAPI(symbol=config.symbol, interval=config.interval)
 
     def _validate(self):
         if self.config.interval != "1h":
@@ -38,12 +38,6 @@ class Backtester:
             raise ValueError("max_hold_bars must be > 0")
         if self.config.stop_loss_pnl_pct <= 0 or self.config.take_profit_pnl_pct <= 0:
             raise ValueError("stop_loss_pnl_pct and take_profit_pnl_pct must be > 0")
-
-    @staticmethod
-    def _append_timestamp(save_path: str) -> Path:
-        path = Path(save_path)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return path.with_name(f"{path.stem}_{ts}{path.suffix}")
 
     def _build_tp_sl_prices(self, entry_price: float, side: str, leverage: float):
         tp_move = (self.config.take_profit_pnl_pct / 100.0) / leverage
@@ -69,13 +63,11 @@ class Backtester:
     def _to_klines(self, candles_df: pd.DataFrame, symbol: str) -> List[Kline]:
         klines: List[Kline] = []
         for _, row in candles_df.iterrows():
-            ts = row["open_time"]
-            timestamp = int(pd.Timestamp(ts).timestamp())
             klines.append(
                 Kline(
                     symbol=symbol,
                     interval=self.config.interval,
-                    timestamp=timestamp,
+                    timestamp=int(pd.Timestamp(row["open_time"]).timestamp()),
                     open_price=float(row["open"]),
                     high_price=float(row["high"]),
                     low_price=float(row["low"]),
@@ -85,15 +77,6 @@ class Backtester:
             )
         return klines
 
-    def _build_entry_window_klines(self, all_klines: List[Kline], entry_idx: int) -> List[Kline]:
-        start = max(0, entry_idx - 4)
-        end = min(len(all_klines), entry_idx + 5)
-        return all_klines[start:end]
-
-    @staticmethod
-    def _format_dt(value: Any) -> str:
-        return pd.to_datetime(value).strftime("%Y-%m-%d %H:%M:%S")
-
     def run(
         self,
         start_time: Optional[str] = None,
@@ -101,7 +84,7 @@ class Backtester:
         limit: int = 1000,
     ) -> Dict[str, Any]:
         self._validate()
-        candles_df = self.monitor.get_klines(
+        candles_df = self.api.get_klines(
             symbol=self.config.symbol,
             interval=self.config.interval,
             start_time=start_time,
@@ -118,7 +101,7 @@ class Backtester:
             close_price = kline.close_price
             high_price = kline.high_price
             low_price = kline.low_price
-            open_time = pd.to_datetime(kline.timestamp, unit="s")
+            open_time = to_datetime(kline.timestamp)
 
             if position is None:
                 signal = self.strategy.generate_entry_signal(i, klines)
@@ -129,6 +112,7 @@ class Backtester:
                     position = {
                         "entry_idx": i,
                         "entry_time": open_time,
+                        "entry_kline": kline,
                         "side": side,
                         "leverage": leverage,
                         "signal": signal.get("signal"),
@@ -155,9 +139,7 @@ class Backtester:
 
             exit_reason = None
             exit_price = close_price
-
             if hit_tp and hit_sl:
-                # Conservative assumption for bar-level backtest ambiguity.
                 exit_reason = "stop_loss_same_bar"
                 exit_price = sl_price
             elif hit_sl:
@@ -182,6 +164,7 @@ class Backtester:
                     {
                         "entry_idx": position["entry_idx"],
                         "entry_time": position["entry_time"],
+                        "entry_kline": position["entry_kline"],
                         "exit_time": open_time,
                         "side": side,
                         "leverage": leverage,
@@ -201,7 +184,7 @@ class Backtester:
                 position = None
 
         total_net_levered_return = sum(t["net_levered_return"] for t in trades)
-        result = {
+        return {
             "symbol": self.config.symbol,
             "interval": self.config.interval,
             "max_hold_bars": self.config.max_hold_bars,
@@ -211,9 +194,11 @@ class Backtester:
             "trades": len(trades),
             "total_net_levered_return": total_net_levered_return,
             "trade_list": trades,
-            "all_klines": klines,
         }
-        return result
+
+    @staticmethod
+    def _format_pct(ratio: float) -> str:
+        return f"{ratio * 100:.2f}%"
 
     def save_trades_xlsx(self, result: Dict[str, Any], output_path: str) -> str:
         side_map = {"long": "做多", "short": "做空"}
@@ -224,7 +209,6 @@ class Backtester:
             "strategy": "策略平仓",
             "max_hold_4h": "超时平仓(4小时)",
         }
-
         headers = [
             "序号",
             "交易对",
@@ -247,37 +231,38 @@ class Backtester:
             "止损规则(账户%)",
             "止盈规则(账户%)",
             "最大持有小时",
-            "买入点前后4h蜡烛图",
+            "买入点前后4h蜡烛图(高亮当前时刻)",
+            "当前时刻前7天日线图(高亮当前时刻)",
         ]
 
         wb = Workbook()
         ws = wb.active
         ws.title = "Backtest"
-
         for col_idx, header in enumerate(headers, start=1):
             ws.cell(row=1, column=col_idx, value=header)
 
-        charts_dir = Path(output_path).parent / "charts"
+        out_target = append_timestamp(output_path)
+        charts_dir = out_target.parent / "charts"
         charts_dir.mkdir(parents=True, exist_ok=True)
-
-        all_klines: List[Kline] = result.get("all_klines") or []
         drawer = CandlestickDrawer(symbol=result["symbol"], interval=result["interval"])
 
-        image_col_idx = len(headers)
-        image_col_letter = get_column_letter(image_col_idx)
-        ws.column_dimensions[image_col_letter].width = 70
+        chart1_col = len(headers) - 1
+        chart2_col = len(headers)
+        ws.column_dimensions[get_column_letter(chart1_col)].width = 70
+        ws.column_dimensions[get_column_letter(chart2_col)].width = 70
 
         for idx, trade in enumerate(result["trade_list"], start=1):
             row_idx = idx + 1
+            entry_time = to_datetime(trade["entry_time"])
             row_values = [
                 idx,
                 result["symbol"],
                 result["interval"],
-                self._format_dt(trade["entry_time"]),
-                self._format_dt(trade["exit_time"]),
+                format_datetime(trade["entry_time"]),
+                format_datetime(trade["exit_time"]),
                 side_map.get(trade["side"], trade["side"]),
                 trade.get("signal"),
-                trade.get("amplitude_pct"),
+                f"{float(trade.get('amplitude_pct', 0.0)):.2f}%",
                 trade["leverage"],
                 trade["entry_price"],
                 trade["tp_price"],
@@ -285,52 +270,54 @@ class Backtester:
                 trade["exit_price"],
                 trade["hold_bars"],
                 reason_map.get(trade["exit_reason"], trade["exit_reason"]),
-                trade["gross_unlevered_return"],
-                trade["gross_levered_return"],
-                trade["net_levered_return"],
-                result["stop_loss_pnl_pct"],
-                result["take_profit_pnl_pct"],
+                self._format_pct(trade["gross_unlevered_return"]),
+                self._format_pct(trade["gross_levered_return"]),
+                self._format_pct(trade["net_levered_return"]),
+                f"{result['stop_loss_pnl_pct']:.2f}%",
+                f"{result['take_profit_pnl_pct']:.2f}%",
                 result["max_hold_bars"],
             ]
-
             for col_idx, val in enumerate(row_values, start=1):
                 ws.cell(row=row_idx, column=col_idx, value=val)
 
-            if all_klines:
-                window_klines = self._build_entry_window_klines(all_klines, int(trade["entry_idx"]))
-                if window_klines:
-                    entry_time = pd.to_datetime(trade["entry_time"])
-                    chart_base = charts_dir / (
-                        f"{result['symbol']}_{result['interval']}_entry_{idx}_"
-                        f"{entry_time.strftime('%Y%m%d_%H%M%S')}.png"
-                    )
-                    chart_path = drawer._plot_klines(
-                        window_klines,
-                        title=f"{result['symbol']} {result['interval']} Entry {idx} (+/-4h)",
-                        save_path=str(chart_base),
-                        show=False,
-                    )
-                    img = XLImage(chart_path)
-                    img.width = 560
-                    img.height = 280
-                    ws.add_image(img, f"{image_col_letter}{row_idx}")
-                    ws.row_dimensions[row_idx].height = 210
+            entry_kline: Kline = trade["entry_kline"]
+            chart_4h = drawer.plot_around_kline(
+                center_kline=entry_kline,
+                hours_before=4,
+                hours_after=4,
+                save_path=str(charts_dir / f"{result['symbol']}_{result['interval']}_entry_{idx}_4h.png"),
+                show=False,
+            )
+            chart_7d = drawer.plot_last_7d_daily(
+                current_time=entry_time,
+                save_path=str(charts_dir / f"{result['symbol']}_{result['interval']}_entry_{idx}_7d_daily.png"),
+                show=False,
+            )
 
-        for col_idx in range(1, image_col_idx):
-            col_letter = get_column_letter(col_idx)
-            ws.column_dimensions[col_letter].width = 16
+            img1 = XLImage(chart_4h)
+            img1.width = 560
+            img1.height = 280
+            ws.add_image(img1, f"{get_column_letter(chart1_col)}{row_idx}")
 
-        out = self._append_timestamp(output_path)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        wb.save(out)
-        return str(out.resolve())
+            img2 = XLImage(chart_7d)
+            img2.width = 560
+            img2.height = 280
+            ws.add_image(img2, f"{get_column_letter(chart2_col)}{row_idx}")
+
+            ws.row_dimensions[row_idx].height = 210
+
+        for col_idx in range(1, chart1_col):
+            ws.column_dimensions[get_column_letter(col_idx)].width = 16
+
+        out_target.parent.mkdir(parents=True, exist_ok=True)
+        wb.save(out_target)
+        return str(out_target.resolve())
 
 
 if __name__ == "__main__":
     config = BacktestConfig(symbol="BTCUSDT", interval="1h", max_hold_bars=4)
     strategy = SimplePinbarStrategy()
     backtester = Backtester(config=config, strategy=strategy)
-
     summary = backtester.run(
         start_time="2026-01-01 00:00:00",
         end_time="2026-01-24 00:00:00",
