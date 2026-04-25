@@ -52,6 +52,12 @@ class CandlestickDrawer:
         return Period(symbol=self.symbol, interval=self.interval, klines=klines)
 
     @staticmethod
+    def _append_timestamp(save_path: Union[str, Path]) -> Path:
+        path = Path(save_path)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return path.with_name(f"{path.stem}_{timestamp}{path.suffix}")
+
+    @staticmethod
     def _plot_klines(
         klines: List[Kline],
         title: str,
@@ -90,7 +96,7 @@ class CandlestickDrawer:
         ax.grid(alpha=0.2)
 
         out = save_path or "draw/output/candlestick.png"
-        out_path = Path(out)
+        out_path = CandlestickDrawer._append_timestamp(out)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         plt.tight_layout()
         plt.savefig(out_path, dpi=150)
