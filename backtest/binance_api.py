@@ -4,7 +4,7 @@ from typing import Callable, Optional, Union
 
 import pandas as pd
 import requests
-
+import logging
 from backtest.utils import interval_to_seconds, to_unix_millis
 
 BASE_HOSTS = [
@@ -34,6 +34,17 @@ class BinanceAPI:
             except Exception as exc:
                 last_error = exc
         raise RuntimeError(f"All Binance endpoints failed. Last error: {last_error}")
+    
+    def fzx_get_kline(self, symbol, interval, start_time, end_time, limit=500):
+        params = {
+            "symbol": symbol.upper(),
+            "interval": interval,
+            "limit": limit,
+            "startTime": to_unix_millis(start_time),
+            "endTime": to_unix_millis(end_time),
+        }
+        data = self._request("/api/v3/klines", params=params)
+        return data
 
     def get_klines(
         self,
@@ -86,7 +97,7 @@ class BinanceAPI:
         df["number_of_trades"] = df["number_of_trades"].astype(int)
         return df
 
-    def get_current_price(self, symbol: Optional[str] = None) -> float:
+    def get_current_price(self, symbol = None) -> float:
         params = {"symbol": (symbol or self.symbol).upper()}
         data = self._request("/api/v3/ticker/price", params=params)
         return float(data["price"])
@@ -127,3 +138,19 @@ class BinanceAPI:
             except Exception as exc:
                 reporter(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] monitor error: {exc}")
             time.sleep(poll_interval_seconds)
+
+if __name__ == "__main__":
+    logging.basicConfig(
+		level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        datefmt='%Y-%m-%d %H:%M:%S',
+        filename='log',
+        filemode='w'
+    )
+    helper = BinanceAPI()
+    print(helper.get_current_price())
+    start_time="2026-04-28 01:00:00"
+    end_time="2026-04-28 02:00:00"
+    df = helper.get_klines(symbol="BTCUSDT", interval="15m", start_time=start_time, end_time=end_time)
+    df = helper.get_klines(symbol="BTCUSDT", interval="1h", start_time=start_time, end_time=end_time)
+    print(df)

@@ -10,6 +10,7 @@ from PIL import Image
 from backtest.binance_api import BinanceAPI
 from backtest.run_backtest import BacktestConfig, Backtester
 from strategies.base import BaseStrategy
+from test.result_utils import get_result_dir, write_json, write_text
 
 
 class _DummyStrategy(BaseStrategy):
@@ -59,6 +60,16 @@ class TestBacktest(unittest.TestCase):
         result = bt.run(start_time="2026-01-01 00:00:00", end_time="2026-01-02 00:00:00", limit=100)
         self.assertEqual(result["trades"], 1)
         self.assertEqual(result["trade_list"][0]["exit_reason"], "max_hold_4h")
+        write_json(
+            "test_backtest/run_summary.json",
+            {
+                "symbol": result["symbol"],
+                "interval": result["interval"],
+                "trades": result["trades"],
+                "total_net_levered_return": result["total_net_levered_return"],
+                "first_trade": result["trade_list"][0],
+            },
+        )
 
     @patch.object(BinanceAPI, "get_klines")
     def test_backtest_save_xlsx(self, mock_get_klines):
@@ -76,6 +87,12 @@ class TestBacktest(unittest.TestCase):
                 out = bt.save_trades_xlsx(result, output_path=os.path.join(td, "report.xlsx"))
                 self.assertTrue(os.path.exists(out))
                 self.assertRegex(os.path.basename(out), r"report_\d{8}_\d{6}\.xlsx")
+                result_dir = get_result_dir() / "test_backtest"
+                result_dir.mkdir(parents=True, exist_ok=True)
+                copied = result_dir / os.path.basename(out)
+                with open(out, "rb") as src, open(copied, "wb") as dst:
+                    dst.write(src.read())
+                write_text("test_backtest/save_xlsx.log", f"xlsx: {copied}")
 
 
 if __name__ == "__main__":

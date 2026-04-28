@@ -10,6 +10,7 @@ import pandas as pd
 
 from backtest.binance_api import BinanceAPI
 from draw.candlestick_drawer import CandlestickDrawer
+from test.result_utils import get_result_dir, write_text
 
 matplotlib.use("Agg")
 
@@ -54,6 +55,9 @@ class TestCandlestickDrawer(unittest.TestCase):
         mock_get_klines.side_effect = _side_effect
 
         intervals = ["1h", "15m", "1d", "2h"]
+        result_dir = get_result_dir() / "test_draw"
+        result_dir.mkdir(parents=True, exist_ok=True)
+        log_lines = []
         with tempfile.TemporaryDirectory() as td:
             for itv in intervals:
                 drawer = CandlestickDrawer(symbol="BTCUSDT", interval=itv)
@@ -66,6 +70,10 @@ class TestCandlestickDrawer(unittest.TestCase):
                 )
                 self.assertTrue(os.path.exists(out))
                 self.assertRegex(os.path.basename(out), re.compile(rf"chart_{re.escape(itv)}_\d{{8}}_\d{{6}}\.png"))
+                target = result_dir / os.path.basename(out)
+                os.replace(out, target)
+                log_lines.append(f"{itv}: {target}")
+        write_text("test_draw/plot_by_time_range.log", "\n".join(log_lines))
 
     @patch.object(BinanceAPI, "get_klines")
     def test_plot_last_7d_and_high_low(self, mock_get_klines):
@@ -91,6 +99,14 @@ class TestCandlestickDrawer(unittest.TestCase):
             self.assertTrue(os.path.exists(out))
             self.assertTrue(drawer.is_obvious_high_7d(current_time="2026-01-08 00:00:00"))
             self.assertFalse(drawer.is_obvious_low_7d(current_time="2026-01-08 00:00:00"))
+            result_dir = get_result_dir() / "test_draw"
+            result_dir.mkdir(parents=True, exist_ok=True)
+            target = result_dir / os.path.basename(out)
+            os.replace(out, target)
+            write_text(
+                "test_draw/plot_last_7d.log",
+                f"chart: {target}\nis_obvious_high_7d: True\nis_obvious_low_7d: False\n",
+            )
 
 
 if __name__ == "__main__":

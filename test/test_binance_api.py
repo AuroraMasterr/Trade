@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from backtest.binance_api import BinanceAPI
+from test.result_utils import write_json, write_text
 
 
 class _MockResponse:
@@ -41,12 +42,15 @@ class TestBinanceAPI(unittest.TestCase):
         self.assertEqual(len(df), 1)
         self.assertEqual(float(df.loc[0, "close"]), 100.5)
         self.assertEqual(int(df.loc[0, "number_of_trades"]), 2)
+        write_json("test_binance_api/get_klines.json", df.to_dict(orient="records"))
 
     @patch("backtest.binance_api.requests.get")
     def test_get_current_price(self, mock_get):
         mock_get.return_value = _MockResponse({"symbol": "BTCUSDT", "price": "98765.43"})
         api = BinanceAPI(symbol="BTCUSDT", interval="1h")
-        self.assertEqual(api.get_current_price(), 98765.43)
+        price = api.get_current_price()
+        self.assertEqual(price, 98765.43)
+        write_json("test_binance_api/get_current_price.json", {"symbol": "BTCUSDT", "price": price})
 
     def test_buy_sell_not_implemented(self):
         api = BinanceAPI(symbol="BTCUSDT", interval="1h")
@@ -54,6 +58,7 @@ class TestBinanceAPI(unittest.TestCase):
             api.buy(symbol="BTCUSDT", quantity=0.1)
         with self.assertRaises(NotImplementedError):
             api.sell(symbol="BTCUSDT", quantity=0.1)
+        write_text("test_binance_api/buy_sell.log", "buy/sell raise NotImplementedError as expected")
 
 
 if __name__ == "__main__":

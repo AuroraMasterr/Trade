@@ -2,6 +2,7 @@ import unittest
 
 from backtest.kline import Kline
 from strategies.hourly_template import SimplePinbarStrategy
+from test.result_utils import write_json, write_text
 
 
 def _k(ts: int, op: float, hi: float, lo: float, cl: float) -> Kline:
@@ -30,6 +31,7 @@ class TestSimplePinbarStrategy(unittest.TestCase):
         self.assertIsNotNone(signal)
         self.assertEqual(signal["side"], "short")
         self.assertEqual(signal["leverage"], 30)
+        write_json("test_strategy/bearish_signal.json", signal)
 
     def test_bullish_pinbar_entry_and_leverage(self):
         s = SimplePinbarStrategy(lookback_bars=3, min_amplitude_pct=0.8)
@@ -43,11 +45,13 @@ class TestSimplePinbarStrategy(unittest.TestCase):
         self.assertIsNotNone(signal)
         self.assertEqual(signal["side"], "long")
         self.assertEqual(signal["leverage"], 10)
+        write_json("test_strategy/bullish_signal.json", signal)
 
     def test_should_close_default_false(self):
         s = SimplePinbarStrategy()
         k = _k(1, 100, 101, 99, 100)
         self.assertFalse(s.should_close(0, [k], {"entry_price": 100}))
+        write_text("test_strategy/should_close.log", "should_close returns False by default")
 
 
 if __name__ == "__main__":
