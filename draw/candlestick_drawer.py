@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
+from matplotlib.gridspec import GridSpec
 from matplotlib.ticker import FuncFormatter
 
 from backtest.binance_api import BinanceAPI
@@ -286,7 +287,12 @@ class CandlestickDrawer:
         pct_ohlc = CandlestickDrawer._to_percent_ohlc(klines, base_price=base_price)
 
         x_vals = [mdates.date2num(datetime.fromtimestamp(k.timestamp)) for k in klines]
-        interval_seconds = 3600 if interval == "1h" else 900 if interval == "15m" else 3600
+        interval_seconds_map = {
+            "15m": 900,
+            "1h": 3600,
+            "4h": 14400,
+        }
+        interval_seconds = interval_seconds_map.get(interval, 3600)
         width = (interval_seconds / 86400.0) * 0.7
         highlight_x = x_vals[highlight_idx]
 
@@ -356,6 +362,13 @@ class CandlestickDrawer:
             ax.set_xticks(x_vals)
             ax.set_xticklabels(
                 [datetime.fromtimestamp(k.timestamp).strftime("%H:%M") for k in klines],
+                rotation=0,
+            )
+            ax.tick_params(axis="x", labelbottom=True)
+        elif interval == "4h":
+            ax.set_xticks(x_vals)
+            ax.set_xticklabels(
+                [datetime.fromtimestamp(k.timestamp).strftime("%m-%d %H:%M") for k in klines],
                 rotation=0,
             )
             ax.tick_params(axis="x", labelbottom=True)
@@ -438,6 +451,166 @@ class CandlestickDrawer:
         plt.tight_layout()
 
         out = append_timestamp(save_path or "draw/output/dual_timeframe_chart.png")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(out, dpi=150)
+        if show:
+            plt.show()
+        plt.close(fig)
+        return str(out.resolve())
+
+    def plot_hourly_triple_timeframe(
+        self,
+        anchor_hour: Optional[Union[str, datetime]] = None,
+        save_path: Optional[Union[str, Path]] = None,
+        show: bool = False,
+        y_mode: str = "price",
+    ) -> str:
+        """
+        Build a stitched image with:
+        - last 48h in 4h candles  [anchor-48h, anchor)
+        - last 12h in 1h candles  [anchor-12h, anchor)
+        - last 3h  in 15m candles [anchor-3h,  anchor)
+        """
+        anchor_dt = to_datetime(anchor_hour or datetime.now()).replace(minute=0, second=0, microsecond=0)
+        h4_start = anchor_dt - timedelta(hours=48)
+        h1_start = anchor_dt - timedelta(hours=12)
+        m15_start = anchor_dt - timedelta(hours=3)
+
+        h4_period = self._fetch_period(start_time=h4_start, end_time=anchor_dt, interval="4h", limit=24)
+        h1_period = self._fetch_period(start_time=h1_start, end_time=anchor_dt, interval="1h", limit=24)
+        m15_period = self._fetch_period(start_time=m15_start, end_time=anchor_dt, interval="15m", limit=32)
+
+        h4_klines = [k for k in h4_period.klines if h4_start.timestamp() <= k.timestamp < anchor_dt.timestamp()]
+        h1_klines = [k for k in h1_period.klines if h1_start.timestamp() <= k.timestamp < anchor_dt.timestamp()]
+        m15_klines = [k for k in m15_period.klines if m15_start.timestamp() <= k.timestamp < anchor_dt.timestamp()]
+
+        if len(h4_klines) > 12:
+            h4_klines = h4_klines[-12:]
+        if len(h1_klines) > 12:
+            h1_klines = h1_klines[-12:]
+        if len(m15_klines) > 12:
+            m15_klines = m15_klines[-12:]
+
+        if not h4_klines or not h1_klines or not m15_klines:
+            raise ValueError("Not enough kline data to draw triple timeframe chart.")
+
+        CandlestickDrawer._setup_plot_style()
+        fig, axes = plt.subplots(3, 1, figsize=(16, 14), sharex=False)
+
+        self._plot_klines_on_axis(
+            axes[0],
+            h4_klines,
+            title=f"{self.symbol} 4小时K线（{h4_start:%Y-%m-%d %H:%M} 至 {anchor_dt:%Y-%m-%d %H:%M}，不含{anchor_dt:%H:00}）",
+            highlight_time=anchor_dt - timedelta(hours=4),
+            y_mode=y_mode,
+            interval="4h",
+        )
+        self._plot_klines_on_axis(
+            axes[1],
+            h1_klines,
+            title=f"{self.symbol} 1小时K线（{h1_start:%Y-%m-%d %H:%M} 至 {anchor_dt:%Y-%m-%d %H:%M}，不含{anchor_dt:%H:00}）",
+            highlight_time=anchor_dt - timedelta(hours=1),
+            y_mode=y_mode,
+            interval="1h",
+        )
+        self._plot_klines_on_axis(
+            axes[2],
+            m15_klines,
+            title=f"{self.symbol} 15分钟K线（{m15_start:%Y-%m-%d %H:%M} 至 {anchor_dt:%Y-%m-%d %H:%M}，不含{anchor_dt:%H:00}）",
+            highlight_time=anchor_dt - timedelta(minutes=15),
+            y_mode=y_mode,
+            interval="15m",
+        )
+
+        axes[0].tick_params(axis="x", labelbottom=True)
+        axes[1].tick_params(axis="x", labelbottom=True)
+        axes[2].tick_params(axis="x", labelbottom=True)
+        fig.suptitle(f"{self.symbol} 多周期快照（4h/1h/15m，整点：{anchor_dt:%Y-%m-%d %H:%M}）", fontsize=14)
+        plt.tight_layout()
+
+        out = append_timestamp(save_path or "draw/output/triple_timeframe_chart.png")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(out, dpi=150)
+        if show:
+            plt.show()
+        plt.close(fig)
+        return str(out.resolve())
+
+    def plot_hourly_triple_timeframe_split(
+        self,
+        anchor_hour: Optional[Union[str, datetime]] = None,
+        save_path: Optional[Union[str, Path]] = None,
+        show: bool = False,
+        y_mode: str = "price",
+    ) -> str:
+        """
+        Build a stitched image with split layout:
+        - left:  1h candles (last 12h)
+        - right-top: 4h candles (last 48h)
+        - right-bottom: 15m candles (last 3h)
+        """
+        anchor_dt = to_datetime(anchor_hour or datetime.now()).replace(minute=0, second=0, microsecond=0)
+        h4_start = anchor_dt - timedelta(hours=48)
+        h1_start = anchor_dt - timedelta(hours=12)
+        m15_start = anchor_dt - timedelta(hours=3)
+
+        h4_period = self._fetch_period(start_time=h4_start, end_time=anchor_dt, interval="4h", limit=24)
+        h1_period = self._fetch_period(start_time=h1_start, end_time=anchor_dt, interval="1h", limit=24)
+        m15_period = self._fetch_period(start_time=m15_start, end_time=anchor_dt, interval="15m", limit=32)
+
+        h4_klines = [k for k in h4_period.klines if h4_start.timestamp() <= k.timestamp < anchor_dt.timestamp()]
+        h1_klines = [k for k in h1_period.klines if h1_start.timestamp() <= k.timestamp < anchor_dt.timestamp()]
+        m15_klines = [k for k in m15_period.klines if m15_start.timestamp() <= k.timestamp < anchor_dt.timestamp()]
+
+        if len(h4_klines) > 12:
+            h4_klines = h4_klines[-12:]
+        if len(h1_klines) > 12:
+            h1_klines = h1_klines[-12:]
+        if len(m15_klines) > 12:
+            m15_klines = m15_klines[-12:]
+
+        if not h4_klines or not h1_klines or not m15_klines:
+            raise ValueError("Not enough kline data to draw split triple timeframe chart.")
+
+        CandlestickDrawer._setup_plot_style()
+        fig = plt.figure(figsize=(18, 10))
+        gs = GridSpec(2, 2, figure=fig, width_ratios=[1.2, 1.0], height_ratios=[1, 1], wspace=0.16, hspace=0.28)
+        ax_left = fig.add_subplot(gs[:, 0])   # 1h spans two rows
+        ax_rt = fig.add_subplot(gs[0, 1])     # 4h
+        ax_rb = fig.add_subplot(gs[1, 1])     # 15m
+
+        self._plot_klines_on_axis(
+            ax_left,
+            h1_klines,
+            title=f"{self.symbol} 1小时K线（{h1_start:%Y-%m-%d %H:%M} 至 {anchor_dt:%Y-%m-%d %H:%M}，不含{anchor_dt:%H:00}）",
+            highlight_time=anchor_dt - timedelta(hours=1),
+            y_mode=y_mode,
+            interval="1h",
+        )
+        self._plot_klines_on_axis(
+            ax_rt,
+            h4_klines,
+            title=f"{self.symbol} 4小时K线（{h4_start:%Y-%m-%d %H:%M} 至 {anchor_dt:%Y-%m-%d %H:%M}，不含{anchor_dt:%H:00}）",
+            highlight_time=anchor_dt - timedelta(hours=4),
+            y_mode=y_mode,
+            interval="4h",
+        )
+        self._plot_klines_on_axis(
+            ax_rb,
+            m15_klines,
+            title=f"{self.symbol} 15分钟K线（{m15_start:%Y-%m-%d %H:%M} 至 {anchor_dt:%Y-%m-%d %H:%M}，不含{anchor_dt:%H:00}）",
+            highlight_time=anchor_dt - timedelta(minutes=15),
+            y_mode=y_mode,
+            interval="15m",
+        )
+
+        ax_left.tick_params(axis="x", labelbottom=True)
+        ax_rt.tick_params(axis="x", labelbottom=True)
+        ax_rb.tick_params(axis="x", labelbottom=True)
+        fig.suptitle(f"{self.symbol} 多周期快照（左1h | 右4h/15m，整点：{anchor_dt:%Y-%m-%d %H:%M}）", fontsize=14)
+        plt.tight_layout()
+
+        out = append_timestamp(save_path or "draw/output/triple_timeframe_split_chart.png")
         out.parent.mkdir(parents=True, exist_ok=True)
         plt.savefig(out, dpi=150)
         if show:
