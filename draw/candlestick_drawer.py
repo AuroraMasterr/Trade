@@ -310,17 +310,55 @@ class CandlestickDrawer:
         highlight_y = ohlc_seq[highlight_idx][3]
         ax.scatter([highlight_x], [highlight_y], color="#6b7280", s=28, zorder=4)
 
+        highs = [v[1] for v in ohlc_seq]
+        lows = [v[2] for v in ohlc_seq]
+        max_y = max(highs)
+        min_y = min(lows)
+        ax.axhline(max_y, color="#2563eb", linestyle="--", linewidth=1.0, alpha=0.65, zorder=1)
+        ax.axhline(min_y, color="#7c3aed", linestyle="--", linewidth=1.0, alpha=0.65, zorder=1)
+
         ax.set_title(title)
         ax.set_xlabel("时间")
         if y_mode == "pct":
             ax.set_ylabel("涨跌幅(%)")
             ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.2f}%"))
+            max_label = f"最高: {max_y:.2f}%"
+            min_label = f"最低: {min_y:.2f}%"
         else:
             ax.set_ylabel("价格")
+            max_label = f"最高: {max_y:.4f}"
+            min_label = f"最低: {min_y:.4f}"
+
+        # Label high/low levels on the left side near y-axis.
+        ax.text(
+            0.005,
+            max_y,
+            max_label,
+            transform=ax.get_yaxis_transform(),
+            ha="left",
+            va="bottom",
+            fontsize=9,
+            color="#1d4ed8",
+        )
+        ax.text(
+            0.005,
+            min_y,
+            min_label,
+            transform=ax.get_yaxis_transform(),
+            ha="left",
+            va="top",
+            fontsize=9,
+            color="#6d28d9",
+        )
 
         if interval == "1h":
-            ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
-            ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+            # Force one tick per 1h candle to avoid auto-pruning.
+            ax.set_xticks(x_vals)
+            ax.set_xticklabels(
+                [datetime.fromtimestamp(k.timestamp).strftime("%H:%M") for k in klines],
+                rotation=0,
+            )
+            ax.tick_params(axis="x", labelbottom=True)
         elif interval == "15m":
             ax.xaxis.set_major_locator(mdates.MinuteLocator(byminute=[0, 15, 30, 45]))
             ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
@@ -395,7 +433,8 @@ class CandlestickDrawer:
         )
 
         fig.suptitle(f"{self.symbol} 多周期快照（整点：{anchor_dt:%Y-%m-%d %H:%M}）", fontsize=14)
-        fig.autofmt_xdate()
+        axes[0].tick_params(axis="x", labelbottom=True)
+        axes[1].tick_params(axis="x", labelbottom=True)
         plt.tight_layout()
 
         out = append_timestamp(save_path or "draw/output/dual_timeframe_chart.png")
